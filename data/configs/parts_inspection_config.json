@@ -1,0 +1,36 @@
+{
+    "Small Part": {
+        "dimensions": {
+            "length": 100,
+            "width": 100,
+            "height": 50
+        },
+        "inspection_types": [
+            "scratches_small",
+            "fingerprints"
+        ]
+    },
+    "Medium Part": {
+        "dimensions": {
+            "length": 200,
+            "width": 200,
+            "height": 100
+        },
+        "inspection_types": [
+            "scratches_large",
+            "surface_quality"
+        ]
+    },
+    "Large Part": {
+        "dimensions": {
+            "length": 500,
+            "width": 500,
+            "height": 200
+        },
+        "inspection_types": [
+            "edge_quality",
+            "surface_quality",
+            "scratches_large"
+        ]
+    }
+}
