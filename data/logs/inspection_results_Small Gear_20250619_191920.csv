@@ -1,0 +1,4 @@
+scene_number,scene_name,pose_description,defect_type,result,fov,confidence,timestamp
+1,Top View,Top Center,scratches_small,PASS,60,0.8664703598954613,2025-06-19T19:19:16.685068
+2,Side View,Side View,surface_quality,PASS,60,0.9670344361156308,2025-06-19T19:19:18.456743
+3,Bottom View,Center View,scratches_small,PASS,60,0.908949032068915,2025-06-19T19:19:20.436321
