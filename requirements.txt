@@ -4,4 +4,6 @@ streamlit>=1.10.0
 opencv-python>=4.5.0
 matplotlib>=3.4.0
 pytest>=6.2.0
-python-json-logger>=2.0.0 
+python-json-logger>=2.0.0
+plotly>=5.18.0
+streamlit-plotly-events>=0.0.6 

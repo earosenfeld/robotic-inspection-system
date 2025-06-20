@@ -24,41 +24,41 @@ class ArmVisualizer:
         
     def plot_arm(self, arm):
         """
-        Plot the robotic arm configuration.
-        
+        Plot or update the robotic arm configuration.
+        If the scatter/lines already exist, simply update their data for a smoother visual without flicker.
         Args:
             arm: RoboticArm instance or array of joint positions
         """
-        self.ax.clear()
-        self.setup_plot()
-        
         # Get joint positions
         if hasattr(arm, 'get_joint_positions'):
             joint_positions = arm.get_joint_positions()
         else:
             joint_positions = arm
-            
+
         # Extract coordinates
         x = [pos[0] for pos in joint_positions]
         y = [pos[1] for pos in joint_positions]
         z = [pos[2] for pos in joint_positions]
-        
-        # Plot joints
-        self.ax.scatter(x, y, z, c='red', marker='o', s=100)
-        
-        # Plot links
-        for i in range(len(joint_positions) - 1):
-            self.ax.plot(
-                [x[i], x[i+1]],
-                [y[i], y[i+1]],
-                [z[i], z[i+1]],
-                'b-',
-                linewidth=2
-            )
-            
-        # Add base
-        self.ax.plot([0, 0], [0, 0], [0, 0.1], 'k-', linewidth=4)
-        
+
+        # First time: create scatter & lines
+        if not hasattr(self, '_scatter') or self._scatter is None:
+            # Clear & set up plot once
+            self.ax.clear()
+            self.setup_plot()
+            self._scatter = self.ax.scatter(x, y, z, c='red', marker='o', s=100)
+            self._lines = []
+            for i in range(len(joint_positions) - 1):
+                line, = self.ax.plot([x[i], x[i+1]], [y[i], y[i+1]], [z[i], z[i+1]], 'b-', linewidth=2)
+                self._lines.append(line)
+            # Base
+            self.ax.plot([0, 0], [0, 0], [0, 0.1], 'k-', linewidth=4)
+        else:
+            # Update scatter data
+            self._scatter._offsets3d = (x, y, z)
+            # Update line data
+            for i, line in enumerate(self._lines):
+                line.set_data_3d([x[i], x[i+1]], [y[i], y[i+1]], [z[i], z[i+1]])
+
         plt.draw()
         
     def get_figure(self):
