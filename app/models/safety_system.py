@@ -1,7 +1,6 @@
 from enum import Enum
 from typing import List, Dict, Any, Optional
 import time
-from datetime import datetime
 
 class SafetyState(Enum):
     """Enumeration of possible safety system states."""
@@ -19,110 +18,149 @@ class SafetyEvent:
         self.details = details
 
 class SafetySystem:
-    """Model for the safety system."""
-    
+    """
+    Latched safety-state model, mirroring how industrial safety relays behave:
+    a fault forces the system out of NORMAL, clearing the fault leaves it in
+    RESET_REQUIRED, and only an explicit system reset returns it to NORMAL.
+    """
+
     def __init__(self):
         """Initialize the safety system."""
-        self.emergency_stop_active = False
-        self.light_curtain_intact = True
-        self.door_closed = True
-        self.safety_events = []
-        
-    def check_light_curtain(self) -> bool:
-        """
-        Check if the light curtain is intact.
-        
-        Returns:
-            bool: True if light curtain is intact
-        """
-        return self.light_curtain_intact
-        
-    def check_door_status(self) -> bool:
-        """
-        Check if the safety door is closed.
-        
-        Returns:
-            bool: True if door is closed
-        """
-        return self.door_closed
-        
-    def is_emergency_stop_active(self) -> bool:
-        """
-        Check if emergency stop is active.
-        
-        Returns:
-            bool: True if emergency stop is active
-        """
-        return self.emergency_stop_active
-        
-    def trigger_emergency_stop(self):
-        """Trigger the emergency stop."""
-        self.emergency_stop_active = True
-        self.safety_events.append({
-            'type': 'emergency_stop',
-            'timestamp': datetime.now().isoformat()
-        })
-        
-    def trigger_light_curtain_break(self):
-        """Trigger a light curtain break."""
-        self.light_curtain_intact = False
-        self.safety_events.append({
-            'type': 'light_curtain_break',
-            'timestamp': datetime.now().isoformat()
-        })
-        
-    def trigger_door_open(self):
-        """Trigger a door open event."""
-        self.door_closed = False
-        self.safety_events.append({
-            'type': 'door_open',
-            'timestamp': datetime.now().isoformat()
-        })
-        
-    def reset(self) -> bool:
-        """
-        Reset the safety system.
-        
-        Returns:
-            bool: True if reset was successful
-        """
-        if not self.emergency_stop_active:
-            self.light_curtain_intact = True
-            self.door_closed = True
-            self.safety_events.append({
-                'type': 'system_reset',
-                'timestamp': datetime.now().isoformat()
-            })
-            return True
-        return False
+        self.state = SafetyState.NORMAL
+        self.emergency_stop_pressed = False
+        self.light_curtain_status = True   # True = clear/intact
+        self.door_status = True            # True = closed
+        self.events: List[SafetyEvent] = []
 
-    def get_state(self) -> SafetyState:
-        """Get current safety system state."""
-        if self.emergency_stop_active:
-            return SafetyState.EMERGENCY_STOP
-        elif not self.light_curtain_intact:
-            return SafetyState.LIGHT_CURTAIN_BREAK
-        elif not self.door_closed:
-            return SafetyState.DOOR_OPEN
-        else:
-            return SafetyState.RESET_REQUIRED
+    # --- internal helpers -------------------------------------------------
+
+    def _log_event(self, event_type: str, **details):
+        self.events.append(SafetyEvent(event_type, time.time(), details))
+
+    def _update_state_after_fault(self):
+        """Set state to the highest-priority active fault."""
+        if self.emergency_stop_pressed:
+            self.state = SafetyState.EMERGENCY_STOP
+        elif not self.light_curtain_status:
+            self.state = SafetyState.LIGHT_CURTAIN_BREAK
+        elif not self.door_status:
+            self.state = SafetyState.DOOR_OPEN
+        elif self.state != SafetyState.NORMAL:
+            # All faults cleared, but a fault occurred since the last system
+            # reset — operator must acknowledge before returning to NORMAL.
+            self.state = SafetyState.RESET_REQUIRED
+
+    # --- status checks ----------------------------------------------------
+
+    def check_light_curtain(self) -> bool:
+        """True if the light curtain is clear/intact."""
+        return self.light_curtain_status
+
+    def is_light_curtain_clear(self) -> bool:
+        """True if the light curtain is clear/intact."""
+        return self.light_curtain_status
+
+    def check_door(self) -> bool:
+        """True if the safety door is closed."""
+        return self.door_status
+
+    def check_door_status(self) -> bool:
+        """True if the safety door is closed."""
+        return self.door_status
+
+    def is_door_closed(self) -> bool:
+        """True if the safety door is closed."""
+        return self.door_status
+
+    def check_emergency_stop(self) -> bool:
+        """True if the emergency stop is NOT pressed (circuit healthy)."""
+        return not self.emergency_stop_pressed
+
+    def is_emergency_stop_active(self) -> bool:
+        """True if the emergency stop is pressed."""
+        return self.emergency_stop_pressed
+
+    def is_safe(self) -> bool:
+        """True only when no fault is active and no reset is pending."""
+        return self.state == SafetyState.NORMAL
+
+    # --- fault triggers ---------------------------------------------------
+
+    def trigger_emergency_stop(self):
+        """Press the emergency stop."""
+        self.emergency_stop_pressed = True
+        self._log_event("emergency_stop")
+        self._update_state_after_fault()
+
+    def trigger_light_curtain_break(self):
+        """Break the light curtain."""
+        self.light_curtain_status = False
+        self._log_event("light_curtain_break")
+        self._update_state_after_fault()
+
+    def trigger_door_open(self):
+        """Open the safety door."""
+        self.door_status = False
+        self._log_event("door_open")
+        self._update_state_after_fault()
+
+    # --- fault resets -----------------------------------------------------
+
+    def reset_emergency_stop(self):
+        """Release the emergency stop (system stays in RESET_REQUIRED)."""
+        self.emergency_stop_pressed = False
+        self._log_event("emergency_stop_reset")
+        self._update_state_after_fault()
+
+    def reset_light_curtain(self):
+        """Clear the light curtain (system stays in RESET_REQUIRED)."""
+        self.light_curtain_status = True
+        self._log_event("light_curtain_reset")
+        self._update_state_after_fault()
+
+    def reset_door(self):
+        """Close the safety door (system stays in RESET_REQUIRED)."""
+        self.door_status = True
+        self._log_event("door_reset")
+        self._update_state_after_fault()
+
+    # --- system reset -----------------------------------------------------
+
+    def reset_system(self) -> bool:
+        """
+        Acknowledge cleared faults and return to NORMAL.
+
+        Returns False if there is nothing to reset (already NORMAL) or a
+        fault is still active; True on success.
+        """
+        if self.state != SafetyState.RESET_REQUIRED:
+            return False
+        self.state = SafetyState.NORMAL
+        self._log_event("system_reset")
+        return True
+
+    def reset(self) -> bool:
+        """Alias for reset_system() kept for controller compatibility."""
+        return self.reset_system()
+
+    # --- event history ----------------------------------------------------
 
     def get_events(self, limit: Optional[int] = None) -> List[SafetyEvent]:
         """
         Get list of safety events.
-        
+
         Args:
             limit: Optional limit on number of events to return
-            
+
         Returns:
             List of safety events
         """
         if limit is not None:
-            return self.safety_events[-limit:]
-        return self.safety_events
+            return self.events[-limit:]
+        return self.events
 
-    def is_safe(self) -> bool:
-        """Check if all safety conditions are met."""
-        return (not self.emergency_stop_active and
-                self.light_curtain_intact and
-                self.door_closed) 
+    def get_last_event_time(self) -> Optional[float]:
+        """Timestamp of the most recent safety event, or None."""
+        if not self.events:
+            return None
+        return self.events[-1].timestamp

@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
+"""Launch the Streamlit GUI. The app must run under `streamlit run`,
+so this script just wraps that invocation."""
 import os
+import subprocess
 import sys
 
-# Add the project root directory to the Python path
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.append(project_root)
-
-from app.views.gui import main
+gui_path = os.path.join(project_root, "app", "views", "gui.py")
 
 if __name__ == "__main__":
-    main() 
+    sys.exit(subprocess.call(
+        [sys.executable, "-m", "streamlit", "run", gui_path],
+        cwd=project_root,
+    ))

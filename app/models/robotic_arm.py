@@ -109,6 +109,30 @@ class RoboticArm:
             print(f"Error in move_joint: {str(e)}")
             return False
     
+    def step_towards(self, target_angles: np.ndarray, dt: float = 0.01) -> float:
+        """
+        Advance the simulated joints one control step toward target_angles.
+
+        Each joint's PID controller outputs a velocity command (rad/s,
+        saturated by its output limits) which is integrated over dt, so
+        motion unfolds over multiple steps like a real servo axis instead
+        of teleporting.
+
+        Args:
+            target_angles: Array of 6 target joint angles in radians
+            dt: Control timestep in seconds
+
+        Returns:
+            Maximum absolute joint error after the step (radians)
+        """
+        target_angles = np.asarray(target_angles, dtype=float)
+        for i, controller in enumerate(self.pid_controllers):
+            velocity = controller.compute(target_angles[i], self.joint_angles[i], dt=dt)
+            new_angle = self.joint_angles[i] + velocity * dt
+            lo, hi = self.joint_limits[i]
+            self.joint_angles[i] = float(np.clip(new_angle, lo, hi))
+        return float(np.max(np.abs(target_angles - self.joint_angles)))
+
     def move_to_pose(self, target_position: np.ndarray, target_orientation: np.ndarray,
                     max_iterations: int = 100, tolerance: float = 0.001) -> bool:
         """
