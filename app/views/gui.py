@@ -28,9 +28,8 @@ class InspectionGUI:
     def main(self):
         """Main GUI loop."""
         st.title("Robotic Inspection System")
-        
+
         # Controls at the top
-        st.title("Robotic Inspection System")
         part_type = st.selectbox(
             "Select Part Type",
             self.inspection_service.get_available_parts(),

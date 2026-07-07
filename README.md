@@ -7,6 +7,8 @@ forward/inverse kinematics, per-joint PID servo stepping), a simulated
 inspection camera, a latched safety system (light curtain, door switch,
 e-stop), and a Streamlit GUI to drive it all.
 
+![Streamlit GUI: part selection, 3D arm visualization, inspection results](assets/gui.png)
+
 ## What's real vs simulated
 
 | Component | Status |
