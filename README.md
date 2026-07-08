@@ -13,7 +13,7 @@ e-stop), and a Streamlit GUI to drive it all.
 
 | Component | Status |
 |---|---|
-| Kinematics (`app/models/robotic_arm.py`) | Real math — DH forward kinematics, iterative inverse kinematics, joint limits |
+| Kinematics (`app/models/robotic_arm.py`) | Real math — DH forward kinematics, damped-least-squares IK over the full 6D pose (numerical Jacobian), joint limits |
 | Joint motion (`step_towards`) | Real control loop — per-joint PID velocity commands with anti-windup, integrated over explicit timesteps |
 | Safety system (`app/models/safety_system.py`) | Simulated but faithful — latched faults, RESET_REQUIRED acknowledge cycle like an industrial safety relay |
 | Camera / inspection results | Simulated — synthetic pass/fail data, no real image processing |

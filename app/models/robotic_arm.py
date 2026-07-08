@@ -91,23 +91,13 @@ class RoboticArm:
         Move a specific joint to the given angle (in radians).
         Returns True if successful, False otherwise.
         """
-        try:
-            # For simulation, allow joints 3, 4, 5 to always move to 0
-            if joint_index >= 3:
-                self.joint_angles[joint_index] = angle
-                print(f"[Sim] Joint {joint_index} set to {angle} (simulated)")
-                return True
-            # For joints 0, 1, 2, check limits
-            if self.joint_limits[joint_index][0] <= angle <= self.joint_limits[joint_index][1]:
-                self.joint_angles[joint_index] = angle
-                print(f"Joint {joint_index} set to {angle}")
-                return True
-            else:
-                print(f"Joint {joint_index} angle {angle} out of limits {self.joint_limits[joint_index]}")
-                return False
-        except Exception as e:
-            print(f"Error in move_joint: {str(e)}")
+        if not 0 <= joint_index < len(self.joint_angles):
             return False
+        lo, hi = self.joint_limits[joint_index]
+        if lo <= angle <= hi:
+            self.joint_angles[joint_index] = angle
+            return True
+        return False
     
     def step_towards(self, target_angles: np.ndarray, dt: float = 0.01) -> float:
         """
@@ -136,7 +126,7 @@ class RoboticArm:
     def move_to_pose(self, target_position: np.ndarray, target_orientation: np.ndarray,
                     max_iterations: int = 100, tolerance: float = 0.001) -> bool:
         """
-        Move end-effector to target pose using simple inverse kinematics approximation.
+        Move end-effector to a target pose via damped-least-squares inverse kinematics.
         
         Args:
             target_position: [x, y, z] target position
@@ -147,43 +137,14 @@ class RoboticArm:
         Returns:
             True if target pose was reached, False otherwise
         """
-        # Simple inverse kinematics for testing
-        # This is a simplified version that just sets the first three joints
-        # to achieve the target position
-        self.joint_angles[0] = np.arctan2(target_position[1], target_position[0])
-        
-        # Calculate shoulder and elbow angles for the target position
-        x = target_position[0]
-        y = target_position[1]
-        z = target_position[2]
-        
-        # Project target position onto the plane of the arm
-        r = np.sqrt(x**2 + y**2)
-        z = z - self.dh_params[0][2]  # Subtract base height
-        
-        # Calculate angles using geometric approach
-        l1 = self.dh_params[2][0]  # Upper arm length
-        l2 = self.dh_params[3][0]  # Forearm length
-        
-        # Calculate elbow angle using cosine law
-        cos_elbow = (r**2 + z**2 - l1**2 - l2**2) / (2 * l1 * l2)
-        cos_elbow = np.clip(cos_elbow, -1.0, 1.0)
-        self.joint_angles[2] = np.arccos(cos_elbow)
-        
-        # Calculate shoulder angle
-        k1 = l1 + l2 * np.cos(self.joint_angles[2])
-        k2 = l2 * np.sin(self.joint_angles[2])
-        self.joint_angles[1] = np.arctan2(z, r) - np.arctan2(k2, k1)
-        
-        # Set wrist angles to match target orientation
-        self.joint_angles[3] = target_orientation[0]  # Roll
-        self.joint_angles[4] = target_orientation[1]  # Pitch
-        self.joint_angles[5] = target_orientation[2]  # Yaw
-        
-        # Verify if we reached the target
-        current_pos, current_orient = self.get_end_effector_pose()
-        pos_error = np.linalg.norm(target_position - current_pos)
-        
+        solution = self.calculate_inverse_kinematics(
+            list(target_position), list(target_orientation),
+            max_iterations=max_iterations, tolerance=tolerance)
+        if solution is None:
+            return False
+        self.joint_angles = np.asarray(solution, dtype=float)
+        current_pos, _ = self.get_end_effector_pose()
+        pos_error = np.linalg.norm(np.asarray(target_position, dtype=float) - current_pos)
         return bool(pos_error < tolerance)
     
     def reset(self):
@@ -213,50 +174,90 @@ class RoboticArm:
             
         return positions
     
-    def calculate_inverse_kinematics(self, position: List[float], orientation: List[float]) -> Optional[List[float]]:
+    @staticmethod
+    def _rpy_to_matrix(rpy: np.ndarray) -> np.ndarray:
+        """Rotation matrix from [roll, pitch, yaw] (Rz(yaw) @ Ry(pitch) @ Rx(roll)),
+        matching the Euler extraction in get_end_effector_pose()."""
+        r, p, y = rpy
+        cr, sr = np.cos(r), np.sin(r)
+        cp, sp = np.cos(p), np.sin(p)
+        cy, sy = np.cos(y), np.sin(y)
+        Rz = np.array([[cy, -sy, 0], [sy, cy, 0], [0, 0, 1]])
+        Ry = np.array([[cp, 0, sp], [0, 1, 0], [-sp, 0, cp]])
+        Rx = np.array([[1, 0, 0], [0, cr, -sr], [0, sr, cr]])
+        return Rz @ Ry @ Rx
+
+    @staticmethod
+    def _rotation_vector(R: np.ndarray) -> np.ndarray:
+        """Axis-angle vector of a rotation matrix."""
+        angle = np.arccos(np.clip((np.trace(R) - 1.0) / 2.0, -1.0, 1.0))
+        if angle < 1e-9:
+            return np.zeros(3)
+        axis = np.array([
+            R[2, 1] - R[1, 2],
+            R[0, 2] - R[2, 0],
+            R[1, 0] - R[0, 1],
+        ]) / (2.0 * np.sin(angle))
+        return angle * axis
+
+    def jacobian(self, joint_angles: np.ndarray, eps: float = 1e-6) -> np.ndarray:
+        """Numerical 6x6 geometric Jacobian (position + orientation) via
+        central differences on the forward kinematics."""
+        q = np.asarray(joint_angles, dtype=float)
+        J = np.zeros((6, 6))
+        for i in range(6):
+            dq = np.zeros(6)
+            dq[i] = eps
+            T_plus = self.forward_kinematics(q + dq)
+            T_minus = self.forward_kinematics(q - dq)
+            J[:3, i] = (T_plus[:3, 3] - T_minus[:3, 3]) / (2.0 * eps)
+            dR = T_plus[:3, :3] @ T_minus[:3, :3].T
+            J[3:, i] = self._rotation_vector(dR) / (2.0 * eps)
+        return J
+
+    def calculate_inverse_kinematics(self, position: List[float], orientation: List[float],
+                                     max_iterations: int = 200, tolerance: float = 1e-3,
+                                     damping: float = 0.05) -> Optional[List[float]]:
         """
-        Calculate inverse kinematics for a given position and orientation.
-        
+        Damped-least-squares (Levenberg-Marquardt) inverse kinematics.
+
+        Iterates dq = J^T (J J^T + lambda^2 I)^-1 e over the 6D pose error
+        (position + axis-angle orientation), clipping to joint limits each
+        step. The damping term keeps steps bounded near singularities.
+
         Args:
             position: Target position [x, y, z]
-            orientation: Target orientation [rx, ry, rz]
-            
+            orientation: Target orientation [roll, pitch, yaw] (radians)
+            max_iterations: Iteration budget
+            tolerance: Convergence threshold on position error (m); the
+                orientation error uses 10x this threshold in radians
+            damping: DLS damping factor lambda
+
         Returns:
-            List of joint angles if solution found, None otherwise
+            List of joint angles if converged within limits, None otherwise
         """
-        try:
-            print(f"Calculating inverse kinematics for position: {position}, orientation: {orientation}")
-            # Convert position and orientation to numpy arrays
-            position = np.array(position)
-            orientation = np.array(orientation)
-            
-            # Simple inverse kinematics calculation
-            # This is a simplified version - in reality, you would use a proper IK solver
-            x, y, z = position
-            rx, ry, rz = orientation
-            
-            # Calculate joint angles based on position
-            theta1 = np.arctan2(y, x)  # Base rotation
-            r = np.sqrt(x**2 + y**2)   # Distance in x-y plane
-            d = z - self.dh_params[0][2]   # Height above base
-            
-            # Calculate remaining joint angles
-            theta2 = np.arctan2(d, r)  # Shoulder joint
-            theta3 = -theta2           # Elbow joint (simplified)
-            
-            # Combine all joint angles
-            joint_angles = [theta1, theta2, theta3, 0, 0, 0]  # Last 3 joints set to 0 for simplicity
-            
-            # Check if solution is within joint limits
-            if self._check_joint_limits(joint_angles):
-                return joint_angles
-            else:
-                print("Solution outside joint limits")
-                return None
-                
-        except Exception as e:
-            print(f"Error in inverse kinematics: {str(e)}")
-            return None
+        target_pos = np.asarray(position, dtype=float)
+        R_target = self._rpy_to_matrix(np.asarray(orientation, dtype=float))
+        lam_sq = damping ** 2
+        lo = np.array([l for l, _ in self.joint_limits])
+        hi = np.array([h for _, h in self.joint_limits])
+
+        q = np.asarray(self.joint_angles, dtype=float).copy()
+        for _ in range(max_iterations):
+            T = self.forward_kinematics(q)
+            pos_err = target_pos - T[:3, 3]
+            ori_err = self._rotation_vector(R_target @ T[:3, :3].T)
+            if np.linalg.norm(pos_err) < tolerance and np.linalg.norm(ori_err) < 10 * tolerance:
+                return [float(a) for a in q]
+            e = np.concatenate([pos_err, ori_err])
+            J = self.jacobian(q)
+            dq = J.T @ np.linalg.solve(J @ J.T + lam_sq * np.eye(6), e)
+            # Bound the step so a bad linearization cannot fling the arm.
+            step = np.linalg.norm(dq)
+            if step > 0.5:
+                dq *= 0.5 / step
+            q = np.clip(q + dq, lo, hi)
+        return None
 
     def _check_joint_limits(self, joint_angles: List[float]) -> bool:
         """
