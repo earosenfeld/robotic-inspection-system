@@ -1,6 +1,7 @@
 import numpy as np
 from typing import List, Tuple, Optional
 from .pid_controller import PIDController
+import time
 
 class RoboticArm:
     def __init__(self):
@@ -33,6 +34,11 @@ class RoboticArm:
             PIDController(kp=1.0, ki=0.1, kd=0.05, output_limits=(-1.0, 1.0))
             for _ in range(6)
         ]
+        
+        # PID control settings
+        self.use_pid_control = True  # Enable/disable PID control
+        self.pid_update_rate = 100   # Hz - how often PID updates
+        self.pid_tolerance = 0.01    # radians - when to consider target reached
         
     def dh_transform(self, a: float, alpha: float, d: float, theta: float) -> np.ndarray:
         """Compute DH transformation matrix."""
@@ -91,6 +97,16 @@ class RoboticArm:
         Move a specific joint to the given angle (in radians).
         Returns True if successful, False otherwise.
         """
+        if self.use_pid_control:
+            return self.move_joint_with_pid(joint_index, angle)
+        else:
+            return self.move_joint_direct(joint_index, angle)
+    
+    def move_joint_direct(self, joint_index: int, angle: float) -> bool:
+        """
+        Move a joint directly to the target angle (original method).
+        Returns True if successful, False otherwise.
+        """
         try:
             # For simulation, allow joints 3, 4, 5 to always move to 0
             if joint_index >= 3:
@@ -107,6 +123,69 @@ class RoboticArm:
                 return False
         except Exception as e:
             print(f"Error in move_joint: {str(e)}")
+            return False
+    
+    def move_joint_with_pid(self, joint_index: int, target_angle: float) -> bool:
+        """
+        Move a joint to target angle using PID control for smooth movement.
+        Returns True if successful, False otherwise.
+        """
+        try:
+            # Check joint limits first
+            if not (self.joint_limits[joint_index][0] <= target_angle <= self.joint_limits[joint_index][1]):
+                print(f"Joint {joint_index} target angle {target_angle} out of limits {self.joint_limits[joint_index]}")
+                return False
+            
+            print(f"[PID] Moving joint {joint_index} to {target_angle} radians")
+            
+            # PID control loop
+            dt = 1.0 / self.pid_update_rate  # Time step
+            max_iterations = 1000  # Maximum iterations to prevent infinite loops
+            iteration = 0
+            
+            while iteration < max_iterations:
+                # Get current angle
+                current_angle = self.joint_angles[joint_index]
+                
+                # Calculate error
+                error = abs(target_angle - current_angle)
+                
+                # Check if we're close enough to target
+                if error < self.pid_tolerance:
+                    print(f"[PID] Joint {joint_index} reached target {target_angle} (error: {error:.4f})")
+                    return True
+                
+                # Use PID controller to calculate control output
+                control_output = self.pid_controllers[joint_index].compute(
+                    setpoint=target_angle,
+                    process_variable=current_angle
+                )
+                
+                # Apply control output to move joint
+                new_angle = current_angle + control_output * dt
+                
+                # Ensure we stay within limits
+                new_angle = np.clip(new_angle, 
+                                  self.joint_limits[joint_index][0], 
+                                  self.joint_limits[joint_index][1])
+                
+                # Update joint angle
+                self.joint_angles[joint_index] = new_angle
+                
+                # Small delay to simulate real-time control
+                time.sleep(dt)
+                
+                iteration += 1
+                
+                # Print progress every 100 iterations
+                if iteration % 100 == 0:
+                    print(f"[PID] Joint {joint_index}: current={current_angle:.4f}, target={target_angle:.4f}, error={error:.4f}")
+            
+            print(f"[PID] Joint {joint_index} failed to reach target after {max_iterations} iterations")
+            return False
+            
+        except Exception as e:
+            print(f"Error in PID joint movement: {str(e)}")
             return False
     
     def move_to_pose(self, target_position: np.ndarray, target_orientation: np.ndarray,
@@ -247,4 +326,33 @@ class RoboticArm:
         for i, angle in enumerate(joint_angles):
             if not self.joint_limits[i][0] <= angle <= self.joint_limits[i][1]:
                 return False
-        return True 
+        return True
+    
+    def set_pid_control(self, enabled: bool):
+        """Enable or disable PID control."""
+        self.use_pid_control = enabled
+        print(f"PID control {'enabled' if enabled else 'disabled'}")
+    
+    def set_pid_parameters(self, joint_index: int, kp: float, ki: float, kd: float):
+        """Set PID parameters for a specific joint."""
+        if 0 <= joint_index < len(self.pid_controllers):
+            self.pid_controllers[joint_index].kp = kp
+            self.pid_controllers[joint_index].ki = ki
+            self.pid_controllers[joint_index].kd = kd
+            print(f"PID parameters for joint {joint_index}: kp={kp}, ki={ki}, kd={kd}")
+        else:
+            print(f"Invalid joint index: {joint_index}")
+    
+    def get_pid_status(self, joint_index: int) -> dict:
+        """Get PID status for a specific joint."""
+        if 0 <= joint_index < len(self.pid_controllers):
+            controller = self.pid_controllers[joint_index]
+            return {
+                'kp': controller.kp,
+                'ki': controller.ki,
+                'kd': controller.kd,
+                'integral': controller.integral,
+                'previous_error': controller.previous_error
+            }
+        else:
+            return {} 
